@@ -86,7 +86,6 @@
 
 	"src/extras/core/Curve.js",
 	"src/extras/core/CurvePath.js",
-	"src/extras/core/Gyroscope.js",
 	"src/extras/core/Path.js",
 	"src/extras/core/Shape.js",
 	"src/extras/curves/LineCurve.js",
