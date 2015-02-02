@@ -1,15 +1,11 @@
 {
-	"name": "three.js",
+	"name": "tetra-three-builds",
 	"version": "0.0.70",
 	"homepage": "http://threejs.org/",
-	"description": "JavaScript 3D library",
+	"description": "JavaScript 3D library custom builds",
 	"main": "build/three.js",
 	"keywords": [
-		"three",
-		"threejs",
-		"three.js",
-		"3D",
-		"webgl"
+		"threejs-tetra-build"
 	],
 	"license": "MIT",
 	"ignore": [
