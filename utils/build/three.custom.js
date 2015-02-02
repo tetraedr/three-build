@@ -25836,6 +25836,2534 @@ THREE.SpritePlugin = function ( renderer, sprites ) {
 
 };
 
+// File:src/extras/core/Curve.js
+
+/**
+ * @author zz85 / http://www.lab4games.net/zz85/blog
+ * Extensible curve object
+ *
+ * Some common of Curve methods
+ * .getPoint(t), getTangent(t)
+ * .getPointAt(u), getTagentAt(u)
+ * .getPoints(), .getSpacedPoints()
+ * .getLength()
+ * .updateArcLengths()
+ *
+ * This following classes subclasses THREE.Curve:
+ *
+ * -- 2d classes --
+ * THREE.LineCurve
+ * THREE.QuadraticBezierCurve
+ * THREE.CubicBezierCurve
+ * THREE.SplineCurve
+ * THREE.ArcCurve
+ * THREE.EllipseCurve
+ *
+ * -- 3d classes --
+ * THREE.LineCurve3
+ * THREE.QuadraticBezierCurve3
+ * THREE.CubicBezierCurve3
+ * THREE.SplineCurve3
+ * THREE.ClosedSplineCurve3
+ *
+ * A series of curves can be represented as a THREE.CurvePath
+ *
+ **/
+
+/**************************************************************
+ *	Abstract Curve base class
+ **************************************************************/
+
+THREE.Curve = function () {
+
+};
+
+// Virtual base class method to overwrite and implement in subclasses
+//	- t [0 .. 1]
+
+THREE.Curve.prototype.getPoint = function ( t ) {
+
+	console.log( "Warning, getPoint() not implemented!" );
+	return null;
+
+};
+
+// Get point at relative position in curve according to arc length
+// - u [0 .. 1]
+
+THREE.Curve.prototype.getPointAt = function ( u ) {
+
+	var t = this.getUtoTmapping( u );
+	return this.getPoint( t );
+
+};
+
+// Get sequence of points using getPoint( t )
+
+THREE.Curve.prototype.getPoints = function ( divisions ) {
+
+	if ( ! divisions ) divisions = 5;
+
+	var d, pts = [];
+
+	for ( d = 0; d <= divisions; d ++ ) {
+
+		pts.push( this.getPoint( d / divisions ) );
+
+	}
+
+	return pts;
+
+};
+
+// Get sequence of points using getPointAt( u )
+
+THREE.Curve.prototype.getSpacedPoints = function ( divisions ) {
+
+	if ( ! divisions ) divisions = 5;
+
+	var d, pts = [];
+
+	for ( d = 0; d <= divisions; d ++ ) {
+
+		pts.push( this.getPointAt( d / divisions ) );
+
+	}
+
+	return pts;
+
+};
+
+// Get total curve arc length
+
+THREE.Curve.prototype.getLength = function () {
+
+	var lengths = this.getLengths();
+	return lengths[ lengths.length - 1 ];
+
+};
+
+// Get list of cumulative segment lengths
+
+THREE.Curve.prototype.getLengths = function ( divisions ) {
+
+	if ( ! divisions ) divisions = (this.__arcLengthDivisions) ? (this.__arcLengthDivisions): 200;
+
+	if ( this.cacheArcLengths
+		&& ( this.cacheArcLengths.length == divisions + 1 )
+		&& ! this.needsUpdate) {
+
+		//console.log( "cached", this.cacheArcLengths );
+		return this.cacheArcLengths;
+
+	}
+
+	this.needsUpdate = false;
+
+	var cache = [];
+	var current, last = this.getPoint( 0 );
+	var p, sum = 0;
+
+	cache.push( 0 );
+
+	for ( p = 1; p <= divisions; p ++ ) {
+
+		current = this.getPoint ( p / divisions );
+		sum += current.distanceTo( last );
+		cache.push( sum );
+		last = current;
+
+	}
+
+	this.cacheArcLengths = cache;
+
+	return cache; // { sums: cache, sum:sum }; Sum is in the last element.
+
+};
+
+
+THREE.Curve.prototype.updateArcLengths = function() {
+	this.needsUpdate = true;
+	this.getLengths();
+};
+
+// Given u ( 0 .. 1 ), get a t to find p. This gives you points which are equi distance
+
+THREE.Curve.prototype.getUtoTmapping = function ( u, distance ) {
+
+	var arcLengths = this.getLengths();
+
+	var i = 0, il = arcLengths.length;
+
+	var targetArcLength; // The targeted u distance value to get
+
+	if ( distance ) {
+
+		targetArcLength = distance;
+
+	} else {
+
+		targetArcLength = u * arcLengths[ il - 1 ];
+
+	}
+
+	//var time = Date.now();
+
+	// binary search for the index with largest value smaller than target u distance
+
+	var low = 0, high = il - 1, comparison;
+
+	while ( low <= high ) {
+
+		i = Math.floor( low + ( high - low ) / 2 ); // less likely to overflow, though probably not issue here, JS doesn't really have integers, all numbers are floats
+
+		comparison = arcLengths[ i ] - targetArcLength;
+
+		if ( comparison < 0 ) {
+
+			low = i + 1;
+			continue;
+
+		} else if ( comparison > 0 ) {
+
+			high = i - 1;
+			continue;
+
+		} else {
+
+			high = i;
+			break;
+
+			// DONE
+
+		}
+
+	}
+
+	i = high;
+
+	//console.log('b' , i, low, high, Date.now()- time);
+
+	if ( arcLengths[ i ] == targetArcLength ) {
+
+		var t = i / ( il - 1 );
+		return t;
+
+	}
+
+	// we could get finer grain at lengths, or use simple interpolatation between two points
+
+	var lengthBefore = arcLengths[ i ];
+    var lengthAfter = arcLengths[ i + 1 ];
+
+    var segmentLength = lengthAfter - lengthBefore;
+
+    // determine where we are between the 'before' and 'after' points
+
+    var segmentFraction = ( targetArcLength - lengthBefore ) / segmentLength;
+
+    // add that fractional amount to t
+
+    var t = ( i + segmentFraction ) / ( il -1 );
+
+	return t;
+
+};
+
+// Returns a unit vector tangent at t
+// In case any sub curve does not implement its tangent derivation,
+// 2 points a small delta apart will be used to find its gradient
+// which seems to give a reasonable approximation
+
+THREE.Curve.prototype.getTangent = function( t ) {
+
+	var delta = 0.0001;
+	var t1 = t - delta;
+	var t2 = t + delta;
+
+	// Capping in case of danger
+
+	if ( t1 < 0 ) t1 = 0;
+	if ( t2 > 1 ) t2 = 1;
+
+	var pt1 = this.getPoint( t1 );
+	var pt2 = this.getPoint( t2 );
+
+	var vec = pt2.clone().sub(pt1);
+	return vec.normalize();
+
+};
+
+
+THREE.Curve.prototype.getTangentAt = function ( u ) {
+
+	var t = this.getUtoTmapping( u );
+	return this.getTangent( t );
+
+};
+
+
+
+
+
+/**************************************************************
+ *	Utils
+ **************************************************************/
+
+THREE.Curve.Utils = {
+
+	tangentQuadraticBezier: function ( t, p0, p1, p2 ) {
+
+		return 2 * ( 1 - t ) * ( p1 - p0 ) + 2 * t * ( p2 - p1 );
+
+	},
+
+	// Puay Bing, thanks for helping with this derivative!
+
+	tangentCubicBezier: function (t, p0, p1, p2, p3 ) {
+
+		return - 3 * p0 * (1 - t) * (1 - t)  +
+			3 * p1 * (1 - t) * (1-t) - 6 *t *p1 * (1-t) +
+			6 * t *  p2 * (1-t) - 3 * t * t * p2 +
+			3 * t * t * p3;
+
+	},
+
+	tangentSpline: function ( t, p0, p1, p2, p3 ) {
+
+		// To check if my formulas are correct
+
+		var h00 = 6 * t * t - 6 * t; 	// derived from 2t^3 − 3t^2 + 1
+		var h10 = 3 * t * t - 4 * t + 1; // t^3 − 2t^2 + t
+		var h01 = - 6 * t * t + 6 * t; 	// − 2t3 + 3t2
+		var h11 = 3 * t * t - 2 * t;	// t3 − t2
+
+		return h00 + h10 + h01 + h11;
+
+	},
+
+	// Catmull-Rom
+
+	interpolate: function( p0, p1, p2, p3, t ) {
+
+		var v0 = ( p2 - p0 ) * 0.5;
+		var v1 = ( p3 - p1 ) * 0.5;
+		var t2 = t * t;
+		var t3 = t * t2;
+		return ( 2 * p1 - 2 * p2 + v0 + v1 ) * t3 + ( - 3 * p1 + 3 * p2 - 2 * v0 - v1 ) * t2 + v0 * t + p1;
+
+	}
+
+};
+
+
+// TODO: Transformation for Curves?
+
+/**************************************************************
+ *	3D Curves
+ **************************************************************/
+
+// A Factory method for creating new curve subclasses
+
+THREE.Curve.create = function ( constructor, getPointFunc ) {
+
+	constructor.prototype = Object.create( THREE.Curve.prototype );
+	constructor.prototype.constructor = constructor;
+	constructor.prototype.getPoint = getPointFunc;
+
+	return constructor;
+
+};
+
+// File:src/extras/core/CurvePath.js
+
+/**
+ * @author zz85 / http://www.lab4games.net/zz85/blog
+ *
+ **/
+
+/**************************************************************
+ *	Curved Path - a curve path is simply a array of connected
+ *  curves, but retains the api of a curve
+ **************************************************************/
+
+THREE.CurvePath = function () {
+
+	this.curves = [];
+	this.bends = [];
+	
+	this.autoClose = false; // Automatically closes the path
+};
+
+THREE.CurvePath.prototype = Object.create( THREE.Curve.prototype );
+THREE.CurvePath.prototype.constructor = THREE.CurvePath;
+
+THREE.CurvePath.prototype.add = function ( curve ) {
+
+	this.curves.push( curve );
+
+};
+
+THREE.CurvePath.prototype.checkConnection = function() {
+	// TODO
+	// If the ending of curve is not connected to the starting
+	// or the next curve, then, this is not a real path
+};
+
+THREE.CurvePath.prototype.closePath = function() {
+	// TODO Test
+	// and verify for vector3 (needs to implement equals)
+	// Add a line curve if start and end of lines are not connected
+	var startPoint = this.curves[0].getPoint(0);
+	var endPoint = this.curves[this.curves.length-1].getPoint(1);
+	
+	if (! startPoint.equals(endPoint)) {
+		this.curves.push( new THREE.LineCurve(endPoint, startPoint) );
+	}
+	
+};
+
+// To get accurate point with reference to
+// entire path distance at time t,
+// following has to be done:
+
+// 1. Length of each sub path have to be known
+// 2. Locate and identify type of curve
+// 3. Get t for the curve
+// 4. Return curve.getPointAt(t')
+
+THREE.CurvePath.prototype.getPoint = function( t ) {
+
+	var d = t * this.getLength();
+	var curveLengths = this.getCurveLengths();
+	var i = 0, diff, curve;
+
+	// To think about boundaries points.
+
+	while ( i < curveLengths.length ) {
+
+		if ( curveLengths[ i ] >= d ) {
+
+			diff = curveLengths[ i ] - d;
+			curve = this.curves[ i ];
+
+			var u = 1 - diff / curve.getLength();
+
+			return curve.getPointAt( u );
+
+			break;
+		}
+
+		i ++;
+
+	}
+
+	return null;
+
+	// loop where sum != 0, sum > d , sum+1 <d
+
+};
+
+/*
+THREE.CurvePath.prototype.getTangent = function( t ) {
+};*/
+
+
+// We cannot use the default THREE.Curve getPoint() with getLength() because in
+// THREE.Curve, getLength() depends on getPoint() but in THREE.CurvePath
+// getPoint() depends on getLength
+
+THREE.CurvePath.prototype.getLength = function() {
+
+	var lens = this.getCurveLengths();
+	return lens[ lens.length - 1 ];
+
+};
+
+// Compute lengths and cache them
+// We cannot overwrite getLengths() because UtoT mapping uses it.
+
+THREE.CurvePath.prototype.getCurveLengths = function() {
+
+	// We use cache values if curves and cache array are same length
+
+	if ( this.cacheLengths && this.cacheLengths.length == this.curves.length ) {
+
+		return this.cacheLengths;
+
+	};
+
+	// Get length of subsurve
+	// Push sums into cached array
+
+	var lengths = [], sums = 0;
+	var i, il = this.curves.length;
+
+	for ( i = 0; i < il; i ++ ) {
+
+		sums += this.curves[ i ].getLength();
+		lengths.push( sums );
+
+	}
+
+	this.cacheLengths = lengths;
+
+	return lengths;
+
+};
+
+
+
+// Returns min and max coordinates
+
+THREE.CurvePath.prototype.getBoundingBox = function () {
+
+	var points = this.getPoints();
+
+	var maxX, maxY, maxZ;
+	var minX, minY, minZ;
+
+	maxX = maxY = Number.NEGATIVE_INFINITY;
+	minX = minY = Number.POSITIVE_INFINITY;
+
+	var p, i, il, sum;
+
+	var v3 = points[0] instanceof THREE.Vector3;
+
+	sum = v3 ? new THREE.Vector3() : new THREE.Vector2();
+
+	for ( i = 0, il = points.length; i < il; i ++ ) {
+
+		p = points[ i ];
+
+		if ( p.x > maxX ) maxX = p.x;
+		else if ( p.x < minX ) minX = p.x;
+
+		if ( p.y > maxY ) maxY = p.y;
+		else if ( p.y < minY ) minY = p.y;
+
+		if ( v3 ) {
+
+			if ( p.z > maxZ ) maxZ = p.z;
+			else if ( p.z < minZ ) minZ = p.z;
+
+		}
+
+		sum.add( p );
+
+	}
+
+	var ret = {
+
+		minX: minX,
+		minY: minY,
+		maxX: maxX,
+		maxY: maxY
+
+	};
+
+	if ( v3 ) {
+
+		ret.maxZ = maxZ;
+		ret.minZ = minZ;
+
+	}
+
+	return ret;
+
+};
+
+/**************************************************************
+ *	Create Geometries Helpers
+ **************************************************************/
+
+/// Generate geometry from path points (for Line or Points objects)
+
+THREE.CurvePath.prototype.createPointsGeometry = function( divisions ) {
+
+	var pts = this.getPoints( divisions, true );
+	return this.createGeometry( pts );
+
+};
+
+// Generate geometry from equidistance sampling along the path
+
+THREE.CurvePath.prototype.createSpacedPointsGeometry = function( divisions ) {
+
+	var pts = this.getSpacedPoints( divisions, true );
+	return this.createGeometry( pts );
+
+};
+
+THREE.CurvePath.prototype.createGeometry = function( points ) {
+
+	var geometry = new THREE.Geometry();
+
+	for ( var i = 0; i < points.length; i ++ ) {
+
+		geometry.vertices.push( new THREE.Vector3( points[ i ].x, points[ i ].y, points[ i ].z || 0) );
+
+	}
+
+	return geometry;
+
+};
+
+
+/**************************************************************
+ *	Bend / Wrap Helper Methods
+ **************************************************************/
+
+// Wrap path / Bend modifiers?
+
+THREE.CurvePath.prototype.addWrapPath = function ( bendpath ) {
+
+	this.bends.push( bendpath );
+
+};
+
+THREE.CurvePath.prototype.getTransformedPoints = function( segments, bends ) {
+
+	var oldPts = this.getPoints( segments ); // getPoints getSpacedPoints
+	var i, il;
+
+	if ( ! bends ) {
+
+		bends = this.bends;
+
+	}
+
+	for ( i = 0, il = bends.length; i < il; i ++ ) {
+
+		oldPts = this.getWrapPoints( oldPts, bends[ i ] );
+
+	}
+
+	return oldPts;
+
+};
+
+THREE.CurvePath.prototype.getTransformedSpacedPoints = function( segments, bends ) {
+
+	var oldPts = this.getSpacedPoints( segments );
+
+	var i, il;
+
+	if ( ! bends ) {
+
+		bends = this.bends;
+
+	}
+
+	for ( i = 0, il = bends.length; i < il; i ++ ) {
+
+		oldPts = this.getWrapPoints( oldPts, bends[ i ] );
+
+	}
+
+	return oldPts;
+
+};
+
+// This returns getPoints() bend/wrapped around the contour of a path.
+// Read http://www.planetclegg.com/projects/WarpingTextToSplines.html
+
+THREE.CurvePath.prototype.getWrapPoints = function ( oldPts, path ) {
+
+	var bounds = this.getBoundingBox();
+
+	var i, il, p, oldX, oldY, xNorm;
+
+	for ( i = 0, il = oldPts.length; i < il; i ++ ) {
+
+		p = oldPts[ i ];
+
+		oldX = p.x;
+		oldY = p.y;
+
+		xNorm = oldX / bounds.maxX;
+
+		// If using actual distance, for length > path, requires line extrusions
+		//xNorm = path.getUtoTmapping(xNorm, oldX); // 3 styles. 1) wrap stretched. 2) wrap stretch by arc length 3) warp by actual distance
+
+		xNorm = path.getUtoTmapping( xNorm, oldX );
+
+		// check for out of bounds?
+
+		var pathPt = path.getPoint( xNorm );
+		var normal = path.getTangent( xNorm );
+		normal.set( - normal.y, normal.x ).multiplyScalar( oldY );
+
+		p.x = pathPt.x + normal.x;
+		p.y = pathPt.y + normal.y;
+
+	}
+
+	return oldPts;
+
+};
+
+
+// File:src/extras/core/Gyroscope.js
+
+/**
+ * @author alteredq / http://alteredqualia.com/
+ */
+
+THREE.Gyroscope = function () {
+
+	THREE.Object3D.call( this );
+
+};
+
+THREE.Gyroscope.prototype = Object.create( THREE.Object3D.prototype );
+THREE.Gyroscope.prototype.constructor = THREE.Gyroscope;
+
+THREE.Gyroscope.prototype.updateMatrixWorld = ( function () {
+
+	var translationObject = new THREE.Vector3();
+	var quaternionObject = new THREE.Quaternion();
+	var scaleObject = new THREE.Vector3();
+
+	var translationWorld = new THREE.Vector3();
+	var quaternionWorld = new THREE.Quaternion();
+	var scaleWorld = new THREE.Vector3();
+
+	return function ( force ) {
+
+		this.matrixAutoUpdate && this.updateMatrix();
+
+		// update matrixWorld
+
+		if ( this.matrixWorldNeedsUpdate || force ) {
+
+			if ( this.parent ) {
+
+				this.matrixWorld.multiplyMatrices( this.parent.matrixWorld, this.matrix );
+
+				this.matrixWorld.decompose( translationWorld, quaternionWorld, scaleWorld );
+				this.matrix.decompose( translationObject, quaternionObject, scaleObject );
+
+				this.matrixWorld.compose( translationWorld, quaternionObject, scaleWorld );
+
+
+			} else {
+
+				this.matrixWorld.copy( this.matrix );
+
+			}
+
+
+			this.matrixWorldNeedsUpdate = false;
+
+			force = true;
+
+		}
+
+		// update children
+
+		for ( var i = 0, l = this.children.length; i < l; i ++ ) {
+
+			this.children[ i ].updateMatrixWorld( force );
+
+		}
+
+	};
+	
+}() );
+
+// File:src/extras/core/Path.js
+
+/**
+ * @author zz85 / http://www.lab4games.net/zz85/blog
+ * Creates free form 2d path using series of points, lines or curves.
+ *
+ **/
+
+THREE.Path = function ( points ) {
+
+	THREE.CurvePath.call(this);
+
+	this.actions = [];
+
+	if ( points ) {
+
+		this.fromPoints( points );
+
+	}
+
+};
+
+THREE.Path.prototype = Object.create( THREE.CurvePath.prototype );
+THREE.Path.prototype.constructor = THREE.Path;
+
+THREE.PathActions = {
+
+	MOVE_TO: 'moveTo',
+	LINE_TO: 'lineTo',
+	QUADRATIC_CURVE_TO: 'quadraticCurveTo', // Bezier quadratic curve
+	BEZIER_CURVE_TO: 'bezierCurveTo', 		// Bezier cubic curve
+	CSPLINE_THRU: 'splineThru',				// Catmull-rom spline
+	ARC: 'arc',								// Circle
+	ELLIPSE: 'ellipse'
+};
+
+// TODO Clean up PATH API
+
+// Create path using straight lines to connect all points
+// - vectors: array of Vector2
+
+THREE.Path.prototype.fromPoints = function ( vectors ) {
+
+	this.moveTo( vectors[ 0 ].x, vectors[ 0 ].y );
+
+	for ( var v = 1, vlen = vectors.length; v < vlen; v ++ ) {
+
+		this.lineTo( vectors[ v ].x, vectors[ v ].y );
+
+	};
+
+};
+
+// startPath() endPath()?
+
+THREE.Path.prototype.moveTo = function ( x, y ) {
+
+	var args = Array.prototype.slice.call( arguments );
+	this.actions.push( { action: THREE.PathActions.MOVE_TO, args: args } );
+
+};
+
+THREE.Path.prototype.lineTo = function ( x, y ) {
+
+	var args = Array.prototype.slice.call( arguments );
+
+	var lastargs = this.actions[ this.actions.length - 1 ].args;
+
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+
+	var curve = new THREE.LineCurve( new THREE.Vector2( x0, y0 ), new THREE.Vector2( x, y ) );
+	this.curves.push( curve );
+
+	this.actions.push( { action: THREE.PathActions.LINE_TO, args: args } );
+
+};
+
+THREE.Path.prototype.quadraticCurveTo = function( aCPx, aCPy, aX, aY ) {
+
+	var args = Array.prototype.slice.call( arguments );
+
+	var lastargs = this.actions[ this.actions.length - 1 ].args;
+
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+
+	var curve = new THREE.QuadraticBezierCurve( new THREE.Vector2( x0, y0 ),
+												new THREE.Vector2( aCPx, aCPy ),
+												new THREE.Vector2( aX, aY ) );
+	this.curves.push( curve );
+
+	this.actions.push( { action: THREE.PathActions.QUADRATIC_CURVE_TO, args: args } );
+
+};
+
+THREE.Path.prototype.bezierCurveTo = function( aCP1x, aCP1y,
+											   aCP2x, aCP2y,
+											   aX, aY ) {
+
+	var args = Array.prototype.slice.call( arguments );
+
+	var lastargs = this.actions[ this.actions.length - 1 ].args;
+
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+
+	var curve = new THREE.CubicBezierCurve( new THREE.Vector2( x0, y0 ),
+											new THREE.Vector2( aCP1x, aCP1y ),
+											new THREE.Vector2( aCP2x, aCP2y ),
+											new THREE.Vector2( aX, aY ) );
+	this.curves.push( curve );
+
+	this.actions.push( { action: THREE.PathActions.BEZIER_CURVE_TO, args: args } );
+
+};
+
+THREE.Path.prototype.splineThru = function( pts /*Array of Vector*/ ) {
+
+	var args = Array.prototype.slice.call( arguments );
+	var lastargs = this.actions[ this.actions.length - 1 ].args;
+
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+//---
+	var npts = [ new THREE.Vector2( x0, y0 ) ];
+	Array.prototype.push.apply( npts, pts );
+
+	var curve = new THREE.SplineCurve( npts );
+	this.curves.push( curve );
+
+	this.actions.push( { action: THREE.PathActions.CSPLINE_THRU, args: args } );
+
+};
+
+// FUTURE: Change the API or follow canvas API?
+
+THREE.Path.prototype.arc = function ( aX, aY, aRadius,
+									  aStartAngle, aEndAngle, aClockwise ) {
+
+	var lastargs = this.actions[ this.actions.length - 1].args;
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+
+	this.absarc(aX + x0, aY + y0, aRadius,
+		aStartAngle, aEndAngle, aClockwise );
+
+ };
+
+ THREE.Path.prototype.absarc = function ( aX, aY, aRadius,
+									  aStartAngle, aEndAngle, aClockwise ) {
+	this.absellipse(aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise);
+ };
+
+THREE.Path.prototype.ellipse = function ( aX, aY, xRadius, yRadius,
+									  aStartAngle, aEndAngle, aClockwise ) {
+
+	var lastargs = this.actions[ this.actions.length - 1].args;
+	var x0 = lastargs[ lastargs.length - 2 ];
+	var y0 = lastargs[ lastargs.length - 1 ];
+
+	this.absellipse(aX + x0, aY + y0, xRadius, yRadius,
+		aStartAngle, aEndAngle, aClockwise );
+
+ };
+
+
+THREE.Path.prototype.absellipse = function ( aX, aY, xRadius, yRadius,
+									  aStartAngle, aEndAngle, aClockwise ) {
+
+	var args = Array.prototype.slice.call( arguments );
+	var curve = new THREE.EllipseCurve( aX, aY, xRadius, yRadius,
+									aStartAngle, aEndAngle, aClockwise );
+	this.curves.push( curve );
+
+	var lastPoint = curve.getPoint(1);
+	args.push(lastPoint.x);
+	args.push(lastPoint.y);
+
+	this.actions.push( { action: THREE.PathActions.ELLIPSE, args: args } );
+
+ };
+
+THREE.Path.prototype.getSpacedPoints = function ( divisions, closedPath ) {
+
+	if ( ! divisions ) divisions = 40;
+
+	var points = [];
+
+	for ( var i = 0; i < divisions; i ++ ) {
+
+		points.push( this.getPoint( i / divisions ) );
+
+		//if( !this.getPoint( i / divisions ) ) throw "DIE";
+
+	}
+
+	// if ( closedPath ) {
+	//
+	// 	points.push( points[ 0 ] );
+	//
+	// }
+
+	return points;
+
+};
+
+/* Return an array of vectors based on contour of the path */
+
+THREE.Path.prototype.getPoints = function( divisions, closedPath ) {
+
+	if (this.useSpacedPoints) {
+		console.log('tata');
+		return this.getSpacedPoints( divisions, closedPath );
+	}
+
+	divisions = divisions || 12;
+
+	var points = [];
+
+	var i, il, item, action, args;
+	var cpx, cpy, cpx2, cpy2, cpx1, cpy1, cpx0, cpy0,
+		laste, j,
+		t, tx, ty;
+
+	for ( i = 0, il = this.actions.length; i < il; i ++ ) {
+
+		item = this.actions[ i ];
+
+		action = item.action;
+		args = item.args;
+
+		switch( action ) {
+
+		case THREE.PathActions.MOVE_TO:
+
+			points.push( new THREE.Vector2( args[ 0 ], args[ 1 ] ) );
+
+			break;
+
+		case THREE.PathActions.LINE_TO:
+
+			points.push( new THREE.Vector2( args[ 0 ], args[ 1 ] ) );
+
+			break;
+
+		case THREE.PathActions.QUADRATIC_CURVE_TO:
+
+			cpx  = args[ 2 ];
+			cpy  = args[ 3 ];
+
+			cpx1 = args[ 0 ];
+			cpy1 = args[ 1 ];
+
+			if ( points.length > 0 ) {
+
+				laste = points[ points.length - 1 ];
+
+				cpx0 = laste.x;
+				cpy0 = laste.y;
+
+			} else {
+
+				laste = this.actions[ i - 1 ].args;
+
+				cpx0 = laste[ laste.length - 2 ];
+				cpy0 = laste[ laste.length - 1 ];
+
+			}
+
+			for ( j = 1; j <= divisions; j ++ ) {
+
+				t = j / divisions;
+
+				tx = THREE.Shape.Utils.b2( t, cpx0, cpx1, cpx );
+				ty = THREE.Shape.Utils.b2( t, cpy0, cpy1, cpy );
+
+				points.push( new THREE.Vector2( tx, ty ) );
+
+			}
+
+			break;
+
+		case THREE.PathActions.BEZIER_CURVE_TO:
+
+			cpx  = args[ 4 ];
+			cpy  = args[ 5 ];
+
+			cpx1 = args[ 0 ];
+			cpy1 = args[ 1 ];
+
+			cpx2 = args[ 2 ];
+			cpy2 = args[ 3 ];
+
+			if ( points.length > 0 ) {
+
+				laste = points[ points.length - 1 ];
+
+				cpx0 = laste.x;
+				cpy0 = laste.y;
+
+			} else {
+
+				laste = this.actions[ i - 1 ].args;
+
+				cpx0 = laste[ laste.length - 2 ];
+				cpy0 = laste[ laste.length - 1 ];
+
+			}
+
+
+			for ( j = 1; j <= divisions; j ++ ) {
+
+				t = j / divisions;
+
+				tx = THREE.Shape.Utils.b3( t, cpx0, cpx1, cpx2, cpx );
+				ty = THREE.Shape.Utils.b3( t, cpy0, cpy1, cpy2, cpy );
+
+				points.push( new THREE.Vector2( tx, ty ) );
+
+			}
+
+			break;
+
+		case THREE.PathActions.CSPLINE_THRU:
+
+			laste = this.actions[ i - 1 ].args;
+
+			var last = new THREE.Vector2( laste[ laste.length - 2 ], laste[ laste.length - 1 ] );
+			var spts = [ last ];
+
+			var n = divisions * args[ 0 ].length;
+
+			spts = spts.concat( args[ 0 ] );
+
+			var spline = new THREE.SplineCurve( spts );
+
+			for ( j = 1; j <= n; j ++ ) {
+
+				points.push( spline.getPointAt( j / n ) ) ;
+
+			}
+
+			break;
+
+		case THREE.PathActions.ARC:
+
+			var aX = args[ 0 ], aY = args[ 1 ],
+				aRadius = args[ 2 ],
+				aStartAngle = args[ 3 ], aEndAngle = args[ 4 ],
+				aClockwise = !! args[ 5 ];
+
+			var deltaAngle = aEndAngle - aStartAngle;
+			var angle;
+			var tdivisions = divisions * 2;
+
+			for ( j = 1; j <= tdivisions; j ++ ) {
+
+				t = j / tdivisions;
+
+				if ( ! aClockwise ) {
+
+					t = 1 - t;
+
+				}
+
+				angle = aStartAngle + t * deltaAngle;
+
+				tx = aX + aRadius * Math.cos( angle );
+				ty = aY + aRadius * Math.sin( angle );
+
+				//console.log('t', t, 'angle', angle, 'tx', tx, 'ty', ty);
+
+				points.push( new THREE.Vector2( tx, ty ) );
+
+			}
+
+			//console.log(points);
+
+		  break;
+		  
+		case THREE.PathActions.ELLIPSE:
+
+			var aX = args[ 0 ], aY = args[ 1 ],
+				xRadius = args[ 2 ],
+				yRadius = args[ 3 ],
+				aStartAngle = args[ 4 ], aEndAngle = args[ 5 ],
+				aClockwise = !! args[ 6 ];
+
+
+			var deltaAngle = aEndAngle - aStartAngle;
+			var angle;
+			var tdivisions = divisions * 2;
+
+			for ( j = 1; j <= tdivisions; j ++ ) {
+
+				t = j / tdivisions;
+
+				if ( ! aClockwise ) {
+
+					t = 1 - t;
+
+				}
+
+				angle = aStartAngle + t * deltaAngle;
+
+				tx = aX + xRadius * Math.cos( angle );
+				ty = aY + yRadius * Math.sin( angle );
+
+				//console.log('t', t, 'angle', angle, 'tx', tx, 'ty', ty);
+
+				points.push( new THREE.Vector2( tx, ty ) );
+
+			}
+
+			//console.log(points);
+
+		  break;
+
+		} // end switch
+
+	}
+
+
+
+	// Normalize to remove the closing point by default.
+	var lastPoint = points[ points.length - 1];
+	var EPSILON = 0.0000000001;
+	if ( Math.abs(lastPoint.x - points[ 0 ].x) < EPSILON &&
+			 Math.abs(lastPoint.y - points[ 0 ].y) < EPSILON)
+		points.splice( points.length - 1, 1);
+	if ( closedPath ) {
+
+		points.push( points[ 0 ] );
+
+	}
+
+	return points;
+
+};
+
+//
+// Breaks path into shapes
+//
+//	Assumptions (if parameter isCCW==true the opposite holds):
+//	- solid shapes are defined clockwise (CW)
+//	- holes are defined counterclockwise (CCW)
+//
+//	If parameter noHoles==true:
+//  - all subPaths are regarded as solid shapes
+//  - definition order CW/CCW has no relevance
+//
+
+THREE.Path.prototype.toShapes = function( isCCW, noHoles ) {
+
+	function extractSubpaths( inActions ) {
+
+		var i, il, item, action, args;
+
+		var subPaths = [], lastPath = new THREE.Path();
+
+		for ( i = 0, il = inActions.length; i < il; i ++ ) {
+
+			item = inActions[ i ];
+
+			args = item.args;
+			action = item.action;
+
+			if ( action == THREE.PathActions.MOVE_TO ) {
+
+				if ( lastPath.actions.length != 0 ) {
+
+					subPaths.push( lastPath );
+					lastPath = new THREE.Path();
+
+				}
+
+			}
+
+			lastPath[ action ].apply( lastPath, args );
+
+		}
+
+		if ( lastPath.actions.length != 0 ) {
+
+			subPaths.push( lastPath );
+
+		}
+
+		// console.log(subPaths);
+
+		return	subPaths;
+	}
+
+	function toShapesNoHoles( inSubpaths ) {
+
+		var shapes = [];
+
+		for ( var i = 0, il = inSubpaths.length; i < il; i ++ ) {
+
+			var tmpPath = inSubpaths[ i ];
+
+			var tmpShape = new THREE.Shape();
+			tmpShape.actions = tmpPath.actions;
+			tmpShape.curves = tmpPath.curves;
+
+			shapes.push( tmpShape );
+		}
+
+		//console.log("shape", shapes);
+
+		return shapes;
+	};
+
+	function isPointInsidePolygon( inPt, inPolygon ) {
+		var EPSILON = 0.0000000001;
+
+		var polyLen = inPolygon.length;
+
+		// inPt on polygon contour => immediate success    or
+		// toggling of inside/outside at every single! intersection point of an edge
+		//  with the horizontal line through inPt, left of inPt
+		//  not counting lowerY endpoints of edges and whole edges on that line
+		var inside = false;
+		for( var p = polyLen - 1, q = 0; q < polyLen; p = q ++ ) {
+			var edgeLowPt  = inPolygon[ p ];
+			var edgeHighPt = inPolygon[ q ];
+
+			var edgeDx = edgeHighPt.x - edgeLowPt.x;
+			var edgeDy = edgeHighPt.y - edgeLowPt.y;
+
+			if ( Math.abs(edgeDy) > EPSILON ) {			// not parallel
+				if ( edgeDy < 0 ) {
+					edgeLowPt  = inPolygon[ q ]; edgeDx = - edgeDx;
+					edgeHighPt = inPolygon[ p ]; edgeDy = - edgeDy;
+				}
+				if ( ( inPt.y < edgeLowPt.y ) || ( inPt.y > edgeHighPt.y ) ) 		continue;
+
+				if ( inPt.y == edgeLowPt.y ) {
+					if ( inPt.x == edgeLowPt.x )		return	true;		// inPt is on contour ?
+					// continue;				// no intersection or edgeLowPt => doesn't count !!!
+				} else {
+					var perpEdge = edgeDy * (inPt.x - edgeLowPt.x) - edgeDx * (inPt.y - edgeLowPt.y);
+					if ( perpEdge == 0 )				return	true;		// inPt is on contour ?
+					if ( perpEdge < 0 ) 				continue;
+					inside = ! inside;		// true intersection left of inPt
+				}
+			} else {		// parallel or colinear
+				if ( inPt.y != edgeLowPt.y ) 		continue;			// parallel
+				// egde lies on the same horizontal line as inPt
+				if ( ( ( edgeHighPt.x <= inPt.x ) && ( inPt.x <= edgeLowPt.x ) ) ||
+					 ( ( edgeLowPt.x <= inPt.x ) && ( inPt.x <= edgeHighPt.x ) ) )		return	true;	// inPt: Point on contour !
+				// continue;
+			}
+		}
+
+		return	inside;
+	}
+
+
+	var subPaths = extractSubpaths( this.actions );
+	if ( subPaths.length == 0 ) return [];
+
+	if ( noHoles === true )	return	toShapesNoHoles( subPaths );
+
+
+	var solid, tmpPath, tmpShape, shapes = [];
+
+	if ( subPaths.length == 1) {
+
+		tmpPath = subPaths[0];
+		tmpShape = new THREE.Shape();
+		tmpShape.actions = tmpPath.actions;
+		tmpShape.curves = tmpPath.curves;
+		shapes.push( tmpShape );
+		return shapes;
+
+	}
+
+	var holesFirst = ! THREE.Shape.Utils.isClockWise( subPaths[ 0 ].getPoints() );
+	holesFirst = isCCW ? ! holesFirst : holesFirst;
+
+	// console.log("Holes first", holesFirst);
+	
+	var betterShapeHoles = [];
+	var newShapes = [];
+	var newShapeHoles = [];
+	var mainIdx = 0;
+	var tmpPoints;
+
+	newShapes[mainIdx] = undefined;
+	newShapeHoles[mainIdx] = [];
+
+	var i, il;
+
+	for ( i = 0, il = subPaths.length; i < il; i ++ ) {
+
+		tmpPath = subPaths[ i ];
+		tmpPoints = tmpPath.getPoints();
+		solid = THREE.Shape.Utils.isClockWise( tmpPoints );
+		solid = isCCW ? ! solid : solid;
+
+		if ( solid ) {
+
+			if ( (! holesFirst ) && ( newShapes[mainIdx] ) )	mainIdx ++;
+
+			newShapes[mainIdx] = { s: new THREE.Shape(), p: tmpPoints };
+			newShapes[mainIdx].s.actions = tmpPath.actions;
+			newShapes[mainIdx].s.curves = tmpPath.curves;
+			
+			if ( holesFirst )	mainIdx ++;
+			newShapeHoles[mainIdx] = [];
+
+			//console.log('cw', i);
+
+		} else {
+
+			newShapeHoles[mainIdx].push( { h: tmpPath, p: tmpPoints[0] } );
+
+			//console.log('ccw', i);
+
+		}
+
+	}
+
+	// only Holes? -> probably all Shapes with wrong orientation
+	if ( ! newShapes[0] )	return	toShapesNoHoles( subPaths );
+
+
+	if ( newShapes.length > 1 ) {
+		var ambigious = false;
+		var toChange = [];
+
+		for (var sIdx = 0, sLen = newShapes.length; sIdx < sLen; sIdx ++ ) {
+			betterShapeHoles[sIdx] = [];
+		}
+		for (var sIdx = 0, sLen = newShapes.length; sIdx < sLen; sIdx ++ ) {
+			var sh = newShapes[sIdx];
+			var sho = newShapeHoles[sIdx];
+			for (var hIdx = 0; hIdx < sho.length; hIdx ++ ) {
+				var ho = sho[hIdx];
+				var hole_unassigned = true;
+				for (var s2Idx = 0; s2Idx < newShapes.length; s2Idx ++ ) {
+					if ( isPointInsidePolygon( ho.p, newShapes[s2Idx].p ) ) {
+						if ( sIdx != s2Idx )		toChange.push( { froms: sIdx, tos: s2Idx, hole: hIdx } );
+						if ( hole_unassigned ) {
+							hole_unassigned = false;
+							betterShapeHoles[s2Idx].push( ho );
+						} else {
+							ambigious = true;
+						}
+					}
+				}
+				if ( hole_unassigned ) { betterShapeHoles[sIdx].push( ho ); }
+			}
+		}
+		// console.log("ambigious: ", ambigious);
+		if ( toChange.length > 0 ) {
+			// console.log("to change: ", toChange);
+			if (! ambigious)	newShapeHoles = betterShapeHoles;
+		}
+	}
+
+	var tmpHoles, j, jl;
+	for ( i = 0, il = newShapes.length; i < il; i ++ ) {
+		tmpShape = newShapes[i].s;
+		shapes.push( tmpShape );
+		tmpHoles = newShapeHoles[i];
+		for ( j = 0, jl = tmpHoles.length; j < jl; j ++ ) {
+			tmpShape.holes.push( tmpHoles[j].h );
+		}
+	}
+
+	//console.log("shape", shapes);
+
+	return shapes;
+
+};
+
+// File:src/extras/core/Shape.js
+
+/**
+ * @author zz85 / http://www.lab4games.net/zz85/blog
+ * Defines a 2d shape plane using paths.
+ **/
+
+// STEP 1 Create a path.
+// STEP 2 Turn path into shape.
+// STEP 3 ExtrudeGeometry takes in Shape/Shapes
+// STEP 3a - Extract points from each shape, turn to vertices
+// STEP 3b - Triangulate each shape, add faces.
+
+THREE.Shape = function () {
+
+	THREE.Path.apply( this, arguments );
+	this.holes = [];
+
+};
+
+THREE.Shape.prototype = Object.create( THREE.Path.prototype );
+THREE.Shape.prototype.constructor = THREE.Shape;
+
+// Convenience method to return ExtrudeGeometry
+
+THREE.Shape.prototype.extrude = function ( options ) {
+
+	var extruded = new THREE.ExtrudeGeometry( this, options );
+	return extruded;
+
+};
+
+// Convenience method to return ShapeGeometry
+
+THREE.Shape.prototype.makeGeometry = function ( options ) {
+
+	var geometry = new THREE.ShapeGeometry( this, options );
+	return geometry;
+
+};
+
+// Get points of holes
+
+THREE.Shape.prototype.getPointsHoles = function ( divisions ) {
+
+	var i, il = this.holes.length, holesPts = [];
+
+	for ( i = 0; i < il; i ++ ) {
+
+		holesPts[ i ] = this.holes[ i ].getTransformedPoints( divisions, this.bends );
+
+	}
+
+	return holesPts;
+
+};
+
+// Get points of holes (spaced by regular distance)
+
+THREE.Shape.prototype.getSpacedPointsHoles = function ( divisions ) {
+
+	var i, il = this.holes.length, holesPts = [];
+
+	for ( i = 0; i < il; i ++ ) {
+
+		holesPts[ i ] = this.holes[ i ].getTransformedSpacedPoints( divisions, this.bends );
+
+	}
+
+	return holesPts;
+
+};
+
+
+// Get points of shape and holes (keypoints based on segments parameter)
+
+THREE.Shape.prototype.extractAllPoints = function ( divisions ) {
+
+	return {
+
+		shape: this.getTransformedPoints( divisions ),
+		holes: this.getPointsHoles( divisions )
+
+	};
+
+};
+
+THREE.Shape.prototype.extractPoints = function ( divisions ) {
+
+	if (this.useSpacedPoints) {
+		return this.extractAllSpacedPoints(divisions);
+	}
+
+	return this.extractAllPoints(divisions);
+
+};
+
+//
+// THREE.Shape.prototype.extractAllPointsWithBend = function ( divisions, bend ) {
+//
+// 	return {
+//
+// 		shape: this.transform( bend, divisions ),
+// 		holes: this.getPointsHoles( divisions, bend )
+//
+// 	};
+//
+// };
+
+// Get points of shape and holes (spaced by regular distance)
+
+THREE.Shape.prototype.extractAllSpacedPoints = function ( divisions ) {
+
+	return {
+
+		shape: this.getTransformedSpacedPoints( divisions ),
+		holes: this.getSpacedPointsHoles( divisions )
+
+	};
+
+};
+
+/**************************************************************
+ *	Utils
+ **************************************************************/
+
+THREE.Shape.Utils = {
+
+	triangulateShape: function ( contour, holes ) {
+
+		function point_in_segment_2D_colin( inSegPt1, inSegPt2, inOtherPt ) {
+			// inOtherPt needs to be colinear to the inSegment
+			if ( inSegPt1.x != inSegPt2.x ) {
+				if ( inSegPt1.x < inSegPt2.x ) {
+					return	( ( inSegPt1.x <= inOtherPt.x ) && ( inOtherPt.x <= inSegPt2.x ) );
+				} else {
+					return	( ( inSegPt2.x <= inOtherPt.x ) && ( inOtherPt.x <= inSegPt1.x ) );
+				}
+			} else {
+				if ( inSegPt1.y < inSegPt2.y ) {
+					return	( ( inSegPt1.y <= inOtherPt.y ) && ( inOtherPt.y <= inSegPt2.y ) );
+				} else {
+					return	( ( inSegPt2.y <= inOtherPt.y ) && ( inOtherPt.y <= inSegPt1.y ) );
+				}
+			}
+		}
+
+		function intersect_segments_2D( inSeg1Pt1, inSeg1Pt2, inSeg2Pt1, inSeg2Pt2, inExcludeAdjacentSegs ) {
+			var EPSILON = 0.0000000001;
+
+			var seg1dx = inSeg1Pt2.x - inSeg1Pt1.x,   seg1dy = inSeg1Pt2.y - inSeg1Pt1.y;
+			var seg2dx = inSeg2Pt2.x - inSeg2Pt1.x,   seg2dy = inSeg2Pt2.y - inSeg2Pt1.y;
+
+			var seg1seg2dx = inSeg1Pt1.x - inSeg2Pt1.x;
+			var seg1seg2dy = inSeg1Pt1.y - inSeg2Pt1.y;
+
+			var limit		= seg1dy * seg2dx - seg1dx * seg2dy;
+			var perpSeg1	= seg1dy * seg1seg2dx - seg1dx * seg1seg2dy;
+
+			if ( Math.abs(limit) > EPSILON ) {			// not parallel
+
+				var perpSeg2;
+				if ( limit > 0 ) {
+					if ( ( perpSeg1 < 0 ) || ( perpSeg1 > limit ) ) 		return [];
+					perpSeg2 = seg2dy * seg1seg2dx - seg2dx * seg1seg2dy;
+					if ( ( perpSeg2 < 0 ) || ( perpSeg2 > limit ) ) 		return [];
+				} else {
+					if ( ( perpSeg1 > 0 ) || ( perpSeg1 < limit ) ) 		return [];
+					perpSeg2 = seg2dy * seg1seg2dx - seg2dx * seg1seg2dy;
+					if ( ( perpSeg2 > 0 ) || ( perpSeg2 < limit ) ) 		return [];
+				}
+
+				// i.e. to reduce rounding errors
+				// intersection at endpoint of segment#1?
+				if ( perpSeg2 == 0 ) {
+					if ( ( inExcludeAdjacentSegs ) &&
+						 ( ( perpSeg1 == 0 ) || ( perpSeg1 == limit ) ) )		return [];
+					return  [ inSeg1Pt1 ];
+				}
+				if ( perpSeg2 == limit ) {
+					if ( ( inExcludeAdjacentSegs ) &&
+						 ( ( perpSeg1 == 0 ) || ( perpSeg1 == limit ) ) )		return [];
+					return  [ inSeg1Pt2 ];
+				}
+				// intersection at endpoint of segment#2?
+				if ( perpSeg1 == 0 )		return  [ inSeg2Pt1 ];
+				if ( perpSeg1 == limit )	return  [ inSeg2Pt2 ];
+
+				// return real intersection point
+				var factorSeg1 = perpSeg2 / limit;
+				return	[ { x: inSeg1Pt1.x + factorSeg1 * seg1dx,
+							y: inSeg1Pt1.y + factorSeg1 * seg1dy } ];
+
+			} else {		// parallel or colinear
+				if ( ( perpSeg1 != 0 ) ||
+					 ( seg2dy * seg1seg2dx != seg2dx * seg1seg2dy ) ) 			return [];
+
+				// they are collinear or degenerate
+				var seg1Pt = ( (seg1dx == 0) && (seg1dy == 0) );	// segment1 ist just a point?
+				var seg2Pt = ( (seg2dx == 0) && (seg2dy == 0) );	// segment2 ist just a point?
+				// both segments are points
+				if ( seg1Pt && seg2Pt ) {
+					if ( (inSeg1Pt1.x != inSeg2Pt1.x) ||
+						 (inSeg1Pt1.y != inSeg2Pt1.y) )		return [];   	// they are distinct  points
+					return  [ inSeg1Pt1 ];                 					// they are the same point
+				}
+				// segment#1  is a single point
+				if ( seg1Pt ) {
+					if (! point_in_segment_2D_colin( inSeg2Pt1, inSeg2Pt2, inSeg1Pt1 ) )		return [];		// but not in segment#2
+					return  [ inSeg1Pt1 ];
+				}
+				// segment#2  is a single point
+				if ( seg2Pt ) {
+					if (! point_in_segment_2D_colin( inSeg1Pt1, inSeg1Pt2, inSeg2Pt1 ) )		return [];		// but not in segment#1
+					return  [ inSeg2Pt1 ];
+				}
+
+				// they are collinear segments, which might overlap
+				var seg1min, seg1max, seg1minVal, seg1maxVal;
+				var seg2min, seg2max, seg2minVal, seg2maxVal;
+				if (seg1dx != 0) {		// the segments are NOT on a vertical line
+					if ( inSeg1Pt1.x < inSeg1Pt2.x ) {
+						seg1min = inSeg1Pt1; seg1minVal = inSeg1Pt1.x;
+						seg1max = inSeg1Pt2; seg1maxVal = inSeg1Pt2.x;
+					} else {
+						seg1min = inSeg1Pt2; seg1minVal = inSeg1Pt2.x;
+						seg1max = inSeg1Pt1; seg1maxVal = inSeg1Pt1.x;
+					}
+					if ( inSeg2Pt1.x < inSeg2Pt2.x ) {
+						seg2min = inSeg2Pt1; seg2minVal = inSeg2Pt1.x;
+						seg2max = inSeg2Pt2; seg2maxVal = inSeg2Pt2.x;
+					} else {
+						seg2min = inSeg2Pt2; seg2minVal = inSeg2Pt2.x;
+						seg2max = inSeg2Pt1; seg2maxVal = inSeg2Pt1.x;
+					}
+				} else {				// the segments are on a vertical line
+					if ( inSeg1Pt1.y < inSeg1Pt2.y ) {
+						seg1min = inSeg1Pt1; seg1minVal = inSeg1Pt1.y;
+						seg1max = inSeg1Pt2; seg1maxVal = inSeg1Pt2.y;
+					} else {
+						seg1min = inSeg1Pt2; seg1minVal = inSeg1Pt2.y;
+						seg1max = inSeg1Pt1; seg1maxVal = inSeg1Pt1.y;
+					}
+					if ( inSeg2Pt1.y < inSeg2Pt2.y ) {
+						seg2min = inSeg2Pt1; seg2minVal = inSeg2Pt1.y;
+						seg2max = inSeg2Pt2; seg2maxVal = inSeg2Pt2.y;
+					} else {
+						seg2min = inSeg2Pt2; seg2minVal = inSeg2Pt2.y;
+						seg2max = inSeg2Pt1; seg2maxVal = inSeg2Pt1.y;
+					}
+				}
+				if ( seg1minVal <= seg2minVal ) {
+					if ( seg1maxVal <  seg2minVal )	return [];
+					if ( seg1maxVal == seg2minVal )	{
+						if ( inExcludeAdjacentSegs )		return [];
+						return [ seg2min ];
+					}
+					if ( seg1maxVal <= seg2maxVal )	return [ seg2min, seg1max ];
+					return	[ seg2min, seg2max ];
+				} else {
+					if ( seg1minVal >  seg2maxVal )	return [];
+					if ( seg1minVal == seg2maxVal )	{
+						if ( inExcludeAdjacentSegs )		return [];
+						return [ seg1min ];
+					}
+					if ( seg1maxVal <= seg2maxVal )	return [ seg1min, seg1max ];
+					return	[ seg1min, seg2max ];
+				}
+			}
+		}
+
+		function isPointInsideAngle( inVertex, inLegFromPt, inLegToPt, inOtherPt ) {
+			// The order of legs is important
+
+			var EPSILON = 0.0000000001;
+
+			// translation of all points, so that Vertex is at (0,0)
+			var legFromPtX	= inLegFromPt.x - inVertex.x,  legFromPtY	= inLegFromPt.y - inVertex.y;
+			var legToPtX	= inLegToPt.x	- inVertex.x,  legToPtY		= inLegToPt.y	- inVertex.y;
+			var otherPtX	= inOtherPt.x	- inVertex.x,  otherPtY		= inOtherPt.y	- inVertex.y;
+
+			// main angle >0: < 180 deg.; 0: 180 deg.; <0: > 180 deg.
+			var from2toAngle	= legFromPtX * legToPtY - legFromPtY * legToPtX;
+			var from2otherAngle	= legFromPtX * otherPtY - legFromPtY * otherPtX;
+
+			if ( Math.abs(from2toAngle) > EPSILON ) {			// angle != 180 deg.
+
+				var other2toAngle		= otherPtX * legToPtY - otherPtY * legToPtX;
+				// console.log( "from2to: " + from2toAngle + ", from2other: " + from2otherAngle + ", other2to: " + other2toAngle );
+
+				if ( from2toAngle > 0 ) {				// main angle < 180 deg.
+					return	( ( from2otherAngle >= 0 ) && ( other2toAngle >= 0 ) );
+				} else {								// main angle > 180 deg.
+					return	( ( from2otherAngle >= 0 ) || ( other2toAngle >= 0 ) );
+				}
+			} else {										// angle == 180 deg.
+				// console.log( "from2to: 180 deg., from2other: " + from2otherAngle  );
+				return	( from2otherAngle > 0 );
+			}
+		}
+
+
+		function removeHoles( contour, holes ) {
+
+			var shape = contour.concat(); // work on this shape
+			var hole;
+
+			function isCutLineInsideAngles( inShapeIdx, inHoleIdx ) {
+				// Check if hole point lies within angle around shape point
+				var lastShapeIdx = shape.length - 1;
+
+				var prevShapeIdx = inShapeIdx - 1;
+				if ( prevShapeIdx < 0 )			prevShapeIdx = lastShapeIdx;
+
+				var nextShapeIdx = inShapeIdx + 1;
+				if ( nextShapeIdx > lastShapeIdx )	nextShapeIdx = 0;
+
+				var insideAngle = isPointInsideAngle( shape[inShapeIdx], shape[ prevShapeIdx ], shape[ nextShapeIdx ], hole[inHoleIdx] );
+				if (! insideAngle ) {
+					// console.log( "Vertex (Shape): " + inShapeIdx + ", Point: " + hole[inHoleIdx].x + "/" + hole[inHoleIdx].y );
+					return	false;
+				}
+
+				// Check if shape point lies within angle around hole point
+				var lastHoleIdx = hole.length - 1;
+
+				var prevHoleIdx = inHoleIdx - 1;
+				if ( prevHoleIdx < 0 )			prevHoleIdx = lastHoleIdx;
+
+				var nextHoleIdx = inHoleIdx + 1;
+				if ( nextHoleIdx > lastHoleIdx )	nextHoleIdx = 0;
+
+				insideAngle = isPointInsideAngle( hole[inHoleIdx], hole[ prevHoleIdx ], hole[ nextHoleIdx ], shape[inShapeIdx] );
+				if (! insideAngle ) {
+					// console.log( "Vertex (Hole): " + inHoleIdx + ", Point: " + shape[inShapeIdx].x + "/" + shape[inShapeIdx].y );
+					return	false;
+				}
+
+				return	true;
+			}
+
+			function intersectsShapeEdge( inShapePt, inHolePt ) {
+				// checks for intersections with shape edges
+				var sIdx, nextIdx, intersection;
+				for ( sIdx = 0; sIdx < shape.length; sIdx ++ ) {
+					nextIdx = sIdx+1; nextIdx %= shape.length;
+					intersection = intersect_segments_2D( inShapePt, inHolePt, shape[sIdx], shape[nextIdx], true );
+					if ( intersection.length > 0 )		return	true;
+				}
+
+				return	false;
+			}
+
+			var indepHoles = [];
+
+			function intersectsHoleEdge( inShapePt, inHolePt ) {
+				// checks for intersections with hole edges
+				var ihIdx, chkHole,
+					hIdx, nextIdx, intersection;
+				for ( ihIdx = 0; ihIdx < indepHoles.length; ihIdx ++ ) {
+					chkHole = holes[indepHoles[ihIdx]];
+					for ( hIdx = 0; hIdx < chkHole.length; hIdx ++ ) {
+						nextIdx = hIdx+1; nextIdx %= chkHole.length;
+						intersection = intersect_segments_2D( inShapePt, inHolePt, chkHole[hIdx], chkHole[nextIdx], true );
+						if ( intersection.length > 0 )		return	true;
+					}
+				}
+				return	false;
+			}
+
+			var holeIndex, shapeIndex,
+				shapePt, holePt,
+				holeIdx, cutKey, failedCuts = [],
+				tmpShape1, tmpShape2,
+				tmpHole1, tmpHole2;
+
+			for ( var h = 0, hl = holes.length; h < hl; h ++ ) {
+
+				indepHoles.push( h );
+
+			}
+
+			var minShapeIndex = 0;
+			var counter = indepHoles.length * 2;
+			while ( indepHoles.length > 0 ) {
+				counter --;
+				if ( counter < 0 ) {
+					console.log( "Infinite Loop! Holes left:" + indepHoles.length + ", Probably Hole outside Shape!" );
+					break;
+				}
+
+				// search for shape-vertex and hole-vertex,
+				// which can be connected without intersections
+				for ( shapeIndex = minShapeIndex; shapeIndex < shape.length; shapeIndex ++ ) {
+
+					shapePt = shape[ shapeIndex ];
+					holeIndex	= - 1;
+
+					// search for hole which can be reached without intersections
+					for ( var h = 0; h < indepHoles.length; h ++ ) {
+						holeIdx = indepHoles[h];
+
+						// prevent multiple checks
+						cutKey = shapePt.x + ":" + shapePt.y + ":" + holeIdx;
+						if ( failedCuts[cutKey] !== undefined )			continue;
+
+						hole = holes[holeIdx];
+						for ( var h2 = 0; h2 < hole.length; h2 ++ ) {
+							holePt = hole[ h2 ];
+							if (! isCutLineInsideAngles( shapeIndex, h2 ) )		continue;
+							if ( intersectsShapeEdge( shapePt, holePt ) )		continue;
+							if ( intersectsHoleEdge( shapePt, holePt ) )		continue;
+
+							holeIndex = h2;
+							indepHoles.splice(h,1);
+
+							tmpShape1 = shape.slice( 0, shapeIndex+1 );
+							tmpShape2 = shape.slice( shapeIndex );
+							tmpHole1 = hole.slice( holeIndex );
+							tmpHole2 = hole.slice( 0, holeIndex+1 );
+
+							shape = tmpShape1.concat( tmpHole1 ).concat( tmpHole2 ).concat( tmpShape2 );
+
+							minShapeIndex = shapeIndex;
+
+							// Debug only, to show the selected cuts
+							// glob_CutLines.push( [ shapePt, holePt ] );
+
+							break;
+						}
+						if ( holeIndex >= 0 )	break;		// hole-vertex found
+
+						failedCuts[cutKey] = true;			// remember failure
+					}
+					if ( holeIndex >= 0 )	break;		// hole-vertex found
+				}
+			}
+
+			return shape; 			/* shape with no holes */
+		}
+
+
+		var i, il, f, face,
+			key, index,
+			allPointsMap = {};
+
+		// To maintain reference to old shape, one must match coordinates, or offset the indices from original arrays. It's probably easier to do the first.
+
+		var allpoints = contour.concat();
+
+		for ( var h = 0, hl = holes.length; h < hl; h ++ ) {
+
+			Array.prototype.push.apply( allpoints, holes[h] );
+
+		}
+
+		//console.log( "allpoints",allpoints, allpoints.length );
+
+		// prepare all points map
+
+		for ( i = 0, il = allpoints.length; i < il; i ++ ) {
+
+			key = allpoints[ i ].x + ":" + allpoints[ i ].y;
+
+			if ( allPointsMap[ key ] !== undefined ) {
+
+				console.log( "Duplicate point", key );
+
+			}
+
+			allPointsMap[ key ] = i;
+
+		}
+
+		// remove holes by cutting paths to holes and adding them to the shape
+		var shapeWithoutHoles = removeHoles( contour, holes );
+
+		var triangles = THREE.FontUtils.Triangulate( shapeWithoutHoles, false ); // True returns indices for points of spooled shape
+		//console.log( "triangles",triangles, triangles.length );
+
+		// check all face vertices against all points map
+
+		for ( i = 0, il = triangles.length; i < il; i ++ ) {
+
+			face = triangles[ i ];
+
+			for ( f = 0; f < 3; f ++ ) {
+
+				key = face[ f ].x + ":" + face[ f ].y;
+
+				index = allPointsMap[ key ];
+
+				if ( index !== undefined ) {
+
+					face[ f ] = index;
+
+				}
+
+			}
+
+		}
+
+		return triangles.concat();
+
+	},
+
+	isClockWise: function ( pts ) {
+
+		return THREE.FontUtils.Triangulate.area( pts ) < 0;
+
+	},
+
+	// Bezier Curves formulas obtained from
+	// http://en.wikipedia.org/wiki/B%C3%A9zier_curve
+
+	// Quad Bezier Functions
+
+	b2p0: function ( t, p ) {
+
+		var k = 1 - t;
+		return k * k * p;
+
+	},
+
+	b2p1: function ( t, p ) {
+
+		return 2 * ( 1 - t ) * t * p;
+
+	},
+
+	b2p2: function ( t, p ) {
+
+		return t * t * p;
+
+	},
+
+	b2: function ( t, p0, p1, p2 ) {
+
+		return this.b2p0( t, p0 ) + this.b2p1( t, p1 ) + this.b2p2( t, p2 );
+
+	},
+
+	// Cubic Bezier Functions
+
+	b3p0: function ( t, p ) {
+
+		var k = 1 - t;
+		return k * k * k * p;
+
+	},
+
+	b3p1: function ( t, p ) {
+
+		var k = 1 - t;
+		return 3 * k * k * t * p;
+
+	},
+
+	b3p2: function ( t, p ) {
+
+		var k = 1 - t;
+		return 3 * k * t * t * p;
+
+	},
+
+	b3p3: function ( t, p ) {
+
+		return t * t * t * p;
+
+	},
+
+	b3: function ( t, p0, p1, p2, p3 ) {
+
+		return this.b3p0( t, p0 ) + this.b3p1( t, p1 ) + this.b3p2( t, p2 ) +  this.b3p3( t, p3 );
+
+	}
+
+};
+
+
+// File:src/extras/curves/LineCurve.js
+
+/**************************************************************
+ *	Line
+ **************************************************************/
+
+THREE.LineCurve = function ( v1, v2 ) {
+
+	this.v1 = v1;
+	this.v2 = v2;
+
+};
+
+THREE.LineCurve.prototype = Object.create( THREE.Curve.prototype );
+THREE.LineCurve.prototype.constructor = THREE.LineCurve;
+
+THREE.LineCurve.prototype.getPoint = function ( t ) {
+
+	var point = this.v2.clone().sub(this.v1);
+	point.multiplyScalar( t ).add( this.v1 );
+
+	return point;
+
+};
+
+// Line curve is linear, so we can overwrite default getPointAt
+
+THREE.LineCurve.prototype.getPointAt = function ( u ) {
+
+	return this.getPoint( u );
+
+};
+
+THREE.LineCurve.prototype.getTangent = function( t ) {
+
+	var tangent = this.v2.clone().sub(this.v1);
+
+	return tangent.normalize();
+
+};
+
+// File:src/extras/curves/QuadraticBezierCurve.js
+
+/**************************************************************
+ *	Quadratic Bezier curve
+ **************************************************************/
+
+
+THREE.QuadraticBezierCurve = function ( v0, v1, v2 ) {
+
+	this.v0 = v0;
+	this.v1 = v1;
+	this.v2 = v2;
+
+};
+
+THREE.QuadraticBezierCurve.prototype = Object.create( THREE.Curve.prototype );
+THREE.QuadraticBezierCurve.prototype.constructor = THREE.QuadraticBezierCurve;
+
+
+THREE.QuadraticBezierCurve.prototype.getPoint = function ( t ) {
+
+	var vector = new THREE.Vector2();
+
+	vector.x = THREE.Shape.Utils.b2( t, this.v0.x, this.v1.x, this.v2.x );
+	vector.y = THREE.Shape.Utils.b2( t, this.v0.y, this.v1.y, this.v2.y );
+
+	return vector;
+
+};
+
+
+THREE.QuadraticBezierCurve.prototype.getTangent = function( t ) {
+
+	var vector = new THREE.Vector2();
+
+	vector.x = THREE.Curve.Utils.tangentQuadraticBezier( t, this.v0.x, this.v1.x, this.v2.x );
+	vector.y = THREE.Curve.Utils.tangentQuadraticBezier( t, this.v0.y, this.v1.y, this.v2.y );
+
+	// returns unit vector
+
+	return vector.normalize();
+
+};
+
+// File:src/extras/curves/CubicBezierCurve.js
+
+/**************************************************************
+ *	Cubic Bezier curve
+ **************************************************************/
+
+THREE.CubicBezierCurve = function ( v0, v1, v2, v3 ) {
+
+	this.v0 = v0;
+	this.v1 = v1;
+	this.v2 = v2;
+	this.v3 = v3;
+
+};
+
+THREE.CubicBezierCurve.prototype = Object.create( THREE.Curve.prototype );
+THREE.CubicBezierCurve.prototype.constructor = THREE.CubicBezierCurve;
+
+THREE.CubicBezierCurve.prototype.getPoint = function ( t ) {
+
+	var tx, ty;
+
+	tx = THREE.Shape.Utils.b3( t, this.v0.x, this.v1.x, this.v2.x, this.v3.x );
+	ty = THREE.Shape.Utils.b3( t, this.v0.y, this.v1.y, this.v2.y, this.v3.y );
+
+	return new THREE.Vector2( tx, ty );
+
+};
+
+THREE.CubicBezierCurve.prototype.getTangent = function( t ) {
+
+	var tx, ty;
+
+	tx = THREE.Curve.Utils.tangentCubicBezier( t, this.v0.x, this.v1.x, this.v2.x, this.v3.x );
+	ty = THREE.Curve.Utils.tangentCubicBezier( t, this.v0.y, this.v1.y, this.v2.y, this.v3.y );
+
+	var tangent = new THREE.Vector2( tx, ty );
+	tangent.normalize();
+
+	return tangent;
+
+};
+
+// File:src/extras/curves/SplineCurve.js
+
+/**************************************************************
+ *	Spline curve
+ **************************************************************/
+
+THREE.SplineCurve = function ( points /* array of Vector2 */ ) {
+
+	this.points = ( points == undefined ) ? [] : points;
+
+};
+
+THREE.SplineCurve.prototype = Object.create( THREE.Curve.prototype );
+THREE.SplineCurve.prototype.constructor = THREE.SplineCurve;
+
+THREE.SplineCurve.prototype.getPoint = function ( t ) {
+
+	var points = this.points;
+	var point = ( points.length - 1 ) * t;
+
+	var intPoint = Math.floor( point );
+	var weight = point - intPoint;
+
+	var point0 = points[ intPoint == 0 ? intPoint : intPoint - 1 ]
+	var point1 = points[ intPoint ]
+	var point2 = points[ intPoint > points.length - 2 ? points.length -1 : intPoint + 1 ]
+	var point3 = points[ intPoint > points.length - 3 ? points.length -1 : intPoint + 2 ]
+
+	var vector = new THREE.Vector2();
+
+	vector.x = THREE.Curve.Utils.interpolate( point0.x, point1.x, point2.x, point3.x, weight );
+	vector.y = THREE.Curve.Utils.interpolate( point0.y, point1.y, point2.y, point3.y, weight );
+
+	return vector;
+
+};
+
+// File:src/extras/curves/EllipseCurve.js
+
+/**************************************************************
+ *	Ellipse curve
+ **************************************************************/
+
+THREE.EllipseCurve = function ( aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise ) {
+
+	this.aX = aX;
+	this.aY = aY;
+
+	this.xRadius = xRadius;
+	this.yRadius = yRadius;
+
+	this.aStartAngle = aStartAngle;
+	this.aEndAngle = aEndAngle;
+
+	this.aClockwise = aClockwise;
+
+};
+
+THREE.EllipseCurve.prototype = Object.create( THREE.Curve.prototype );
+THREE.EllipseCurve.prototype.constructor = THREE.EllipseCurve;
+
+THREE.EllipseCurve.prototype.getPoint = function ( t ) {
+
+	var deltaAngle = this.aEndAngle - this.aStartAngle;
+
+	if ( deltaAngle < 0 ) deltaAngle += Math.PI * 2;
+	if ( deltaAngle > Math.PI * 2 ) deltaAngle -= Math.PI * 2;
+
+	var angle;
+
+	if ( this.aClockwise === true ) {
+
+		angle = this.aEndAngle + ( 1 - t ) * ( Math.PI * 2 - deltaAngle );
+
+	} else {
+
+		angle = this.aStartAngle + t * deltaAngle;
+
+	}
+	
+	var vector = new THREE.Vector2();
+
+	vector.x = this.aX + this.xRadius * Math.cos( angle );
+	vector.y = this.aY + this.yRadius * Math.sin( angle );
+
+	return vector;
+
+};
+
+// File:src/extras/curves/ArcCurve.js
+
+/**************************************************************
+ *	Arc curve
+ **************************************************************/
+
+THREE.ArcCurve = function ( aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise ) {
+
+	THREE.EllipseCurve.call( this, aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise );
+};
+
+THREE.ArcCurve.prototype = Object.create( THREE.EllipseCurve.prototype );
+THREE.ArcCurve.prototype.constructor = THREE.ArcCurve;
+
+// File:src/extras/curves/LineCurve3.js
+
+/**************************************************************
+ *	Line3D
+ **************************************************************/
+
+THREE.LineCurve3 = THREE.Curve.create(
+
+	function ( v1, v2 ) {
+
+		this.v1 = v1;
+		this.v2 = v2;
+
+	},
+
+	function ( t ) {
+
+		var vector = new THREE.Vector3();
+
+		vector.subVectors( this.v2, this.v1 ); // diff
+		vector.multiplyScalar( t );
+		vector.add( this.v1 );
+
+		return vector;
+
+	}
+
+);
+
+// File:src/extras/curves/QuadraticBezierCurve3.js
+
+/**************************************************************
+ *	Quadratic Bezier 3D curve
+ **************************************************************/
+
+THREE.QuadraticBezierCurve3 = THREE.Curve.create(
+
+	function ( v0, v1, v2 ) {
+
+		this.v0 = v0;
+		this.v1 = v1;
+		this.v2 = v2;
+
+	},
+
+	function ( t ) {
+
+		var vector = new THREE.Vector3();
+
+		vector.x = THREE.Shape.Utils.b2( t, this.v0.x, this.v1.x, this.v2.x );
+		vector.y = THREE.Shape.Utils.b2( t, this.v0.y, this.v1.y, this.v2.y );
+		vector.z = THREE.Shape.Utils.b2( t, this.v0.z, this.v1.z, this.v2.z );
+
+		return vector;
+
+	}
+
+);
+
+// File:src/extras/curves/CubicBezierCurve3.js
+
+/**************************************************************
+ *	Cubic Bezier 3D curve
+ **************************************************************/
+
+THREE.CubicBezierCurve3 = THREE.Curve.create(
+
+	function ( v0, v1, v2, v3 ) {
+
+		this.v0 = v0;
+		this.v1 = v1;
+		this.v2 = v2;
+		this.v3 = v3;
+
+	},
+
+	function ( t ) {
+
+		var vector = new THREE.Vector3();
+
+		vector.x = THREE.Shape.Utils.b3( t, this.v0.x, this.v1.x, this.v2.x, this.v3.x );
+		vector.y = THREE.Shape.Utils.b3( t, this.v0.y, this.v1.y, this.v2.y, this.v3.y );
+		vector.z = THREE.Shape.Utils.b3( t, this.v0.z, this.v1.z, this.v2.z, this.v3.z );
+
+		return vector;
+
+	}
+
+);
+
+// File:src/extras/curves/SplineCurve3.js
+
+/**************************************************************
+ *	Spline 3D curve
+ **************************************************************/
+
+
+THREE.SplineCurve3 = THREE.Curve.create(
+
+	function ( points /* array of Vector3 */) {
+
+		this.points = ( points == undefined ) ? [] : points;
+
+	},
+
+	function ( t ) {
+
+		var points = this.points;
+		var point = ( points.length - 1 ) * t;
+
+		var intPoint = Math.floor( point );
+		var weight = point - intPoint;
+
+		var point0 = points[ intPoint == 0 ? intPoint : intPoint - 1 ];
+		var point1 = points[ intPoint ];
+		var point2 = points[ intPoint > points.length - 2 ? points.length - 1 : intPoint + 1 ];
+		var point3 = points[ intPoint > points.length - 3 ? points.length - 1 : intPoint + 2 ];
+
+		var vector = new THREE.Vector3();
+
+		vector.x = THREE.Curve.Utils.interpolate( point0.x, point1.x, point2.x, point3.x, weight );
+		vector.y = THREE.Curve.Utils.interpolate( point0.y, point1.y, point2.y, point3.y, weight );
+		vector.z = THREE.Curve.Utils.interpolate( point0.z, point1.z, point2.z, point3.z, weight );
+
+		return vector;
+
+	}
+
+);
+
+// File:src/extras/curves/ClosedSplineCurve3.js
+
+/**************************************************************
+ *	Closed Spline 3D curve
+ **************************************************************/
+
+
+THREE.ClosedSplineCurve3 = THREE.Curve.create(
+
+	function ( points /* array of Vector3 */) {
+
+		this.points = ( points == undefined ) ? [] : points;
+
+	},
+
+	function ( t ) {
+
+		var points = this.points;
+		var point = ( points.length - 0 ) * t; // This needs to be from 0-length +1
+
+		var intPoint = Math.floor( point );
+		var weight = point - intPoint;
+
+		intPoint += intPoint > 0 ? 0 : ( Math.floor( Math.abs( intPoint ) / points.length ) + 1 ) * points.length;
+
+		var point0 = points[ ( intPoint - 1 ) % points.length ];
+		var point1 = points[ ( intPoint     ) % points.length ];
+		var point2 = points[ ( intPoint + 1 ) % points.length ];
+		var point3 = points[ ( intPoint + 2 ) % points.length ];
+
+		var vector = new THREE.Vector3();
+
+		vector.x = THREE.Curve.Utils.interpolate( point0.x, point1.x, point2.x, point3.x, weight );
+		vector.y = THREE.Curve.Utils.interpolate( point0.y, point1.y, point2.y, point3.y, weight );
+		vector.z = THREE.Curve.Utils.interpolate( point0.z, point1.z, point2.z, point3.z, weight );
+
+		return vector;
+
+	}
+
+);
+
+// File:src/extras/geometries/BoxGeometry.js
+
+/**
+ * @author mrdoob / http://mrdoob.com/
+ * based on http://papervision3d.googlecode.com/svn/trunk/as3/trunk/src/org/papervision3d/objects/primitives/Cube.as
+ */
+
+THREE.BoxGeometry = function ( width, height, depth, widthSegments, heightSegments, depthSegments ) {
+
+	THREE.Geometry.call( this );
+
+	this.type = 'BoxGeometry';
+
+	this.parameters = {
+		width: width,
+		height: height,
+		depth: depth,
+		widthSegments: widthSegments,
+		heightSegments: heightSegments,
+		depthSegments: depthSegments
+	};
+
+	this.widthSegments = widthSegments || 1;
+	this.heightSegments = heightSegments || 1;
+	this.depthSegments = depthSegments || 1;
+
+	var scope = this;
+
+	var width_half = width / 2;
+	var height_half = height / 2;
+	var depth_half = depth / 2;
+
+	buildPlane( 'z', 'y', - 1, - 1, depth, height, width_half, 0 ); // px
+	buildPlane( 'z', 'y',   1, - 1, depth, height, - width_half, 1 ); // nx
+	buildPlane( 'x', 'z',   1,   1, width, depth, height_half, 2 ); // py
+	buildPlane( 'x', 'z',   1, - 1, width, depth, - height_half, 3 ); // ny
+	buildPlane( 'x', 'y',   1, - 1, width, height, depth_half, 4 ); // pz
+	buildPlane( 'x', 'y', - 1, - 1, width, height, - depth_half, 5 ); // nz
+
+	function buildPlane( u, v, udir, vdir, width, height, depth, materialIndex ) {
+
+		var w, ix, iy,
+		gridX = scope.widthSegments,
+		gridY = scope.heightSegments,
+		width_half = width / 2,
+		height_half = height / 2,
+		offset = scope.vertices.length;
+
+		if ( ( u === 'x' && v === 'y' ) || ( u === 'y' && v === 'x' ) ) {
+
+			w = 'z';
+
+		} else if ( ( u === 'x' && v === 'z' ) || ( u === 'z' && v === 'x' ) ) {
+
+			w = 'y';
+			gridY = scope.depthSegments;
+
+		} else if ( ( u === 'z' && v === 'y' ) || ( u === 'y' && v === 'z' ) ) {
+
+			w = 'x';
+			gridX = scope.depthSegments;
+
+		}
+
+		var gridX1 = gridX + 1,
+		gridY1 = gridY + 1,
+		segment_width = width / gridX,
+		segment_height = height / gridY,
+		normal = new THREE.Vector3();
+
+		normal[ w ] = depth > 0 ? 1 : - 1;
+
+		for ( iy = 0; iy < gridY1; iy ++ ) {
+
+			for ( ix = 0; ix < gridX1; ix ++ ) {
+
+				var vector = new THREE.Vector3();
+				vector[ u ] = ( ix * segment_width - width_half ) * udir;
+				vector[ v ] = ( iy * segment_height - height_half ) * vdir;
+				vector[ w ] = depth;
+
+				scope.vertices.push( vector );
+
+			}
+
+		}
+
+		for ( iy = 0; iy < gridY; iy ++ ) {
+
+			for ( ix = 0; ix < gridX; ix ++ ) {
+
+				var a = ix + gridX1 * iy;
+				var b = ix + gridX1 * ( iy + 1 );
+				var c = ( ix + 1 ) + gridX1 * ( iy + 1 );
+				var d = ( ix + 1 ) + gridX1 * iy;
+
+				var uva = new THREE.Vector2( ix / gridX, 1 - iy / gridY );
+				var uvb = new THREE.Vector2( ix / gridX, 1 - ( iy + 1 ) / gridY );
+				var uvc = new THREE.Vector2( ( ix + 1 ) / gridX, 1 - ( iy + 1 ) / gridY );
+				var uvd = new THREE.Vector2( ( ix + 1 ) / gridX, 1 - iy / gridY );
+
+				var face = new THREE.Face3( a + offset, b + offset, d + offset );
+				face.normal.copy( normal );
+				face.vertexNormals.push( normal.clone(), normal.clone(), normal.clone() );
+				face.materialIndex = materialIndex;
+
+				scope.faces.push( face );
+				scope.faceVertexUvs[ 0 ].push( [ uva, uvb, uvd ] );
+
+				face = new THREE.Face3( b + offset, c + offset, d + offset );
+				face.normal.copy( normal );
+				face.vertexNormals.push( normal.clone(), normal.clone(), normal.clone() );
+				face.materialIndex = materialIndex;
+
+				scope.faces.push( face );
+				scope.faceVertexUvs[ 0 ].push( [ uvb.clone(), uvc, uvd.clone() ] );
+
+			}
+
+		}
+
+	}
+
+	this.mergeVertices();
+
+};
+
+THREE.BoxGeometry.prototype = Object.create( THREE.Geometry.prototype );
+THREE.BoxGeometry.prototype.constructor = THREE.BoxGeometry;
+
 // File:src/extras/geometries/CircleGeometry.js
 
 /**
