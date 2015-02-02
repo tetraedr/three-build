@@ -3,7 +3,7 @@
 	"version": "0.0.70",
 	"homepage": "http://threejs.org/",
 	"description": "JavaScript 3D library custom builds",
-	"main": "build/three.js",
+	"main": "build/three.custom.js",
 	"private": true,
 	"keywords": [
 		"threejs-tetra-build"
