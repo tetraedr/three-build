@@ -297,8 +297,6 @@ THREE.MTLLoader.MaterialCreator.prototype = {
 
 					// Ambient color (color under shadow) using RGB values
 
-					params[ 'ambient' ] = new THREE.Color().fromArray( value );
-
 					break;
 
 				case 'ks':
@@ -342,6 +340,19 @@ THREE.MTLLoader.MaterialCreator.prototype = {
 
 					break;
 
+				case 'map_bump':
+				case 'bump':
+
+					// Bump texture map
+
+					if ( params[ 'bumpMap' ] ) break; // Avoid loading twice.
+
+					params[ 'bumpMap' ] = this.loadTexture( this.baseUrl + value );
+					params[ 'bumpMap' ].wrapS = this.wrap;
+					params[ 'bumpMap' ].wrapT = this.wrap;
+
+					break;
+
 				default:
 					break;
 
@@ -351,7 +362,6 @@ THREE.MTLLoader.MaterialCreator.prototype = {
 
 		if ( params[ 'diffuse' ] ) {
 
-			if ( !params[ 'ambient' ]) params[ 'ambient' ] = params[ 'diffuse' ];
 			params[ 'color' ] = params[ 'diffuse' ];
 
 		}
