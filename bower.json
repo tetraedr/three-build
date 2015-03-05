@@ -9,16 +9,10 @@
 		"threejs-tetra-build"
 	],
 	"license": "MIT",
-	"ignore": [
-		"**/.*",
-		"*.md",
-		"docs",
-		"editor",
-		"examples/*",
-		"!examples/js",
-		"src",
-		"test",
-		"utils",
-		"LICENSE"
-	]
+	 "ignore": [
+	    "**",
+	    "!/build/*",
+	    "!/plugins/*",
+	    "!README.md"
+	  ]
 }
