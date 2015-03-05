@@ -32,6 +32,7 @@
 
 	"src/cameras/Camera.js",
 	"src/cameras/OrthographicCamera.js",
+	"src/cameras/PerspectiveCamera.js",
 
 	"src/lights/Light.js",
 	"src/lights/AmbientLight.js",
