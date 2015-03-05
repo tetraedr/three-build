@@ -12,6 +12,7 @@
 	 "ignore": [
 	    "**",
 	    "!/build/*",
+	    "!/plugins/**/*",
 	    "!/plugins/*",
 	    "!README.md"
 	  ]
